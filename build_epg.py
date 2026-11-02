@@ -23,9 +23,9 @@ import json
 import re
 import unicodedata
 import xml.etree.ElementTree as ET
-from collections import defaultdict
+from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import requests
@@ -50,6 +50,16 @@ MTS_URL = (
     "?sort=pozicija-rastuce&searchQueryContext=CHANNEL_PROGRAM"
     "&query=:pozicija-rastuce:tip-kanala-radio:TV+kanali&pageSize=50"
 )
+
+MTS_PROVIDER = "mts-api"
+
+# Guides with wrong programme times: provider -> default correction in hours.
+# mts.rs labels its times UTC but they are 2h late; epgshare's copy of the mts
+# guide (RS1 channels with <url>www.mts.rs</url>) is 1h late. The actual shift
+# is measured on every build against the correct guides below and the
+# default is only used when it can't be measured.
+TIME_FIXES = {MTS_PROVIDER: -2.0, "www.mts.rs": -1.0}
+REFERENCE_PROVIDERS = {"www.epg.sbb.rs", "www.a1.hr", "www.telemach.ba"}
 
 # Playlist name prefix / name hint -> country code
 COUNTRY_ALIASES = {
@@ -126,11 +136,18 @@ def download(url, cache_dir):
 
 
 def load_source(code, data):
-    """Return {channel_id: {"source", "element", "programmes"}} for one guide."""
+    """Return {channel_id: {"source", "provider", "element", "programmes"}} for one guide.
+
+    "provider" is the original guide owner from the channel's <url>, e.g.
+    www.epg.sbb.rs or www.mts.rs (epgshare mixes several in one file).
+    """
     channels = {}
     for _, elem in ET.iterparse(io.BytesIO(gzip.decompress(data))):
         if elem.tag == "channel":
-            channels[elem.get("id")] = {"source": code, "element": elem, "programmes": []}
+            provider = (elem.findtext("url") or "").split("//")[-1].split("/")[0]
+            channels[elem.get("id")] = {
+                "source": code, "provider": provider, "element": elem, "programmes": [],
+            }
         elif elem.tag == "programme":
             channel = channels.get(elem.get("channel"))
             if channel is not None:
@@ -187,7 +204,9 @@ def load_mts(products):
             if program.get("picture", {}).get("url"):
                 ET.SubElement(programme, "icon", src=program["picture"]["url"])
             programmes.append(programme)
-        channels[channel_id] = {"source": "RS", "element": element, "programmes": programmes}
+        channels[channel_id] = {
+            "source": "RS", "provider": MTS_PROVIDER, "element": element, "programmes": programmes,
+        }
     return channels
 
 
@@ -230,38 +249,102 @@ def build_index(sources):
 
 
 def pick(candidates, country, sources):
-    """Prefer a channel for the playlist's country, then the fullest guide."""
+    """Return (guide channel, filler channel) for one playlist channel.
+
+    mts.rs comes first. It only covers about a day and a half, so a matching
+    epgshare channel (filler) supplies the days after it. Without mts, the
+    epgshare channel for the playlist's country with the fullest guide wins.
+    """
     def score(candidate):
         channel_id, channel_country = candidate
         channel = sources[channel_id]
         return (
             channel_country == country,
             channel["source"] == country,
+            channel["provider"] in REFERENCE_PROVIDERS,
             len(channel["programmes"]),
         )
     candidates = [c for c in candidates if sources[c[0]]["programmes"]]
-    return max(candidates, key=score)[0] if candidates else None
+    mts = [c for c in candidates if sources[c[0]]["provider"] == MTS_PROVIDER]
+    others = [c for c in candidates if sources[c[0]]["provider"] != MTS_PROVIDER]
+    best_other = max(others, key=score)[0] if others else None
+    if mts:
+        return max(mts, key=score)[0], best_other
+    return best_other, None
 
 
 def match_channels(playlist, sources, overrides):
-    """Return ({source id: [playlist entries]}, [unmatched names])."""
+    """Return ({source id: [playlist entries]}, {source id: filler id}, [unmatched names])."""
     index = build_index(sources)
     matched = defaultdict(list)
+    fillers = {}
     unmatched = []
     for name, tvg_id in playlist:
         key, country = channel_key(name)
-        target = overrides.get((key, country))
+        target, filler = overrides.get((key, country)), None
         if target == "-":
             continue
         if target is None and len(key) > 1 and key in index:
-            target = pick(index[key], country, sources)
+            target, filler = pick(index[key], country, sources)
         if target in sources:
             matched[target].append((name, tvg_id))
+            if filler:
+                fillers.setdefault(target, filler)
         else:
             if target:
                 print(f"Warning: override for {name!r} points to unknown channel {target!r}")
             unmatched.append(name)
-    return matched, unmatched
+    return matched, fillers, unmatched
+
+
+def timestamp(value):
+    return datetime.strptime(value, "%Y%m%d%H%M%S %z").timestamp()
+
+
+def measure_offset(sources, provider):
+    """Shift in hours of a provider's times against REFERENCE_PROVIDERS,
+    from programmes with the same title on the same channel, or None."""
+    reference = defaultdict(lambda: defaultdict(list))  # key -> title -> starts
+    for channel in sources.values():
+        if channel["provider"] in REFERENCE_PROVIDERS:
+            for display in channel["element"].findall("display-name"):
+                titles = reference[channel_key(display.text or "")[0]]
+                for programme in channel["programmes"]:
+                    titles[programme.findtext("title")].append(timestamp(programme.get("start")))
+
+    shifts = Counter()
+    for channel in sources.values():
+        if channel["provider"] != provider:
+            continue
+        keys = {channel_key(d.text or "")[0] for d in channel["element"].findall("display-name")}
+        for key in keys & reference.keys():
+            for programme in channel["programmes"]:
+                start = timestamp(programme.get("start"))
+                for ref in reference[key].get(programme.findtext("title"), []):
+                    shift = round((start - ref) / 1800) / 2  # half hours
+                    if abs(shift) <= 4:
+                        shifts[shift] += 1
+    if not shifts:
+        return None
+    (best, count), *rest = shifts.most_common(2) + [(None, 0)]
+    # Repeats of a show give other differences; the real shift must dominate
+    return best if count >= 50 and count >= 2 * rest[0][1] else None
+
+
+def fix_times(sources):
+    for provider, default in TIME_FIXES.items():
+        measured = measure_offset(sources, provider)
+        hours = -measured if measured is not None else default
+        how = "measured" if measured is not None else "default"
+        print(f"Times: {provider} shifted {hours:+g}h ({how})")
+        if not hours:
+            continue
+        for channel in sources.values():
+            if channel["provider"] == provider:
+                for programme in channel["programmes"]:
+                    for attr in ("start", "stop"):
+                        value = datetime.strptime(programme.get(attr), "%Y%m%d%H%M%S %z")
+                        programme.set(attr, (value + timedelta(hours=hours)).strftime("%Y%m%d%H%M%S %z"))
 
 
 def fix_url(url):
@@ -309,7 +392,17 @@ def dead_urls(urls):
         return {url for url, dead in zip(urls, pool.map(is_dead, urls)) if dead}
 
 
-def build_xml(matched, sources):
+def channel_programmes(channel_id, fillers, sources):
+    """The channel's programmes, continued by its filler after they end."""
+    programmes = list(sources[channel_id]["programmes"])
+    filler = fillers.get(channel_id)
+    if filler:
+        end = max((timestamp(p.get("stop")) for p in programmes), default=0)
+        programmes += [p for p in sources[filler]["programmes"] if timestamp(p.get("start")) >= end]
+    return programmes
+
+
+def build_xml(matched, fillers, sources):
     # A playlist tvg-id becomes an extra channel id only when every playlist
     # entry using it matched the same guide channel.
     tvg_targets = defaultdict(set)
@@ -342,7 +435,7 @@ def build_xml(matched, sources):
                 ET.SubElement(channel, "display-name").text = name
             if logo:
                 ET.SubElement(channel, "icon", src=logo)
-            for programme in source["programmes"]:
+            for programme in channel_programmes(channel_id, fillers, sources):
                 copy = ET.Element(programme.tag, dict(programme.attrib, channel=out_id))
                 for child in programme:
                     if child.tag == "icon":
@@ -366,12 +459,13 @@ INDEX_HTML = """<!doctype html>
 """
 
 
-def write_report(matched, unmatched, sources):
+def write_report(matched, fillers, unmatched, sources):
     lines = [f"Matched {sum(map(len, matched.values()))} playlist channels, unmatched {len(unmatched)}", ""]
-    lines.append("== Matched (guide channel <- playlist names)")
+    lines.append("== Matched (guide channel [+ channel for later days] [programmes] <- playlist names)")
     for channel_id in sorted(matched):
         names = ", ".join(name for name, _ in matched[channel_id])
-        lines.append(f"{channel_id} [{len(sources[channel_id]['programmes'])}] <- {names}")
+        filler = f" + {fillers[channel_id]}" if channel_id in fillers else ""
+        lines.append(f"{channel_id}{filler} [{len(channel_programmes(channel_id, fillers, sources))}] <- {names}")
     lines += ["", "== Unmatched (add to overrides.txt if a guide exists)"]
     lines += sorted(unmatched)
     (OUTPUT_DIR / "report.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -395,8 +489,6 @@ def main():
         for channel_id, channel in channels.items():
             sources.setdefault(channel_id, channel)
 
-    # epgshare's RS1 already has most mts channels with more days, so mts only
-    # wins where it has the fuller guide (or when RS1 is down).
     try:
         channels = load_mts(download_mts(args.cache))
         print(f"MTS: {len(channels)} channels")
@@ -406,13 +498,14 @@ def main():
     if not sources:
         raise SystemExit("No guide source could be loaded")
 
-    matched, unmatched = match_channels(load_channels(), sources, load_overrides())
+    fix_times(sources)
+    matched, fillers, unmatched = match_channels(load_channels(), sources, load_overrides())
 
     OUTPUT_DIR.mkdir(exist_ok=True)
-    xml = build_xml(matched, sources)
+    xml = build_xml(matched, fillers, sources)
     (OUTPUT_DIR / "epg.xml").write_bytes(xml)
     (OUTPUT_DIR / "epg.xml.gz").write_bytes(gzip.compress(xml, mtime=0))
-    write_report(matched, unmatched, sources)
+    write_report(matched, fillers, unmatched, sources)
     (OUTPUT_DIR / "index.html").write_text(INDEX_HTML, encoding="utf-8")
     print(f"Wrote {OUTPUT_DIR / 'epg.xml'} ({len(xml) // 1024} KiB)")
 
