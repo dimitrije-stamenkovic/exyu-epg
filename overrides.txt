@@ -1,0 +1,68 @@
+# Manual matches for playlist channels whose names differ from the guide.
+#
+#   playlist channel name = guide channel id     (id as in public/report.txt
+#                                                 or the epgshare01 .txt lists)
+#   playlist channel name = -                    (never match this channel)
+#
+# Names are compared like the automatic matcher does: [tags], HD/TV/EXTRA
+# etc. are ignored, but the country prefix must match, so "BA: BHT" covers
+# "BA: BHT [1080p]" and "BA: BHT [EXTRA]  [1080p]" but not "RS: BHT".
+
+# Serbia
+RS: NOVI PAZAR = RTV.Novi.Pazar.rs
+RS: ARENA 1X2 = Arena.Sport.1x2..rs
+RS: TV SUMADIJA = RTV.Šumadija.rs
+RS: BELLE AMI = TV.Belle.Amie.rs
+RS: IDJ TV = IDJTV.HD.rs
+RS: GRAND 1 = Grand.(RS).rs
+RS: NOVA SPORT = NOVA.S.HD.(RS).rs
+RS: PINK CRIME AND MYSETRY = Pink.Crime.&.Mystery.rs
+RS: PINK ROLL = Pink&Roll.rs
+RS: PINK WESTEREN = Pink.Western.rs
+MO: PINK FOLK 1 = Pink.Folk.rs
+MO: PINK SCFI&FANTASY = Pink.Sci-Fi.&.Fantasy.rs
+MO: SUPER KIDS = Pink.super.kids.rs
+RS: ZADRUGA LIVE = Zadruga.Live.1.(BIH).ba
+RS: ZADRUGA 2 = Zadruga.Live.2.(BIH).ba
+RS: ZADRUGA 3 = Zadruga.Live.3.(BIH).ba
+RS: ZADRUGA 4 = Zadruga.Live.4.(BIH).ba
+RS: CINESTAR TV = CineStar.TV.1.HD.(RS).rs
+RS: CINESTAR COMEDY = CineStar.TV.Comedy.&.Family.HD.rs
+RS: CRIME AND INVESTIGATION NETWORK = Crime.and.Investigation.rs
+RS: DISCOVERY ID = ID.rs
+RS: HISTORY H2 = History.2.rs
+RS: BBC EARHT = BBC.Earth.HD.(RS).rs
+RS: AXN ADRIA = AXN.rs
+MO: FREEДОМ = FREEДOM.(RS).rs
+
+# Bosnia
+BA: BHT = BHT.1.HD.ba
+BA: HAYAT FOLK = Hayat.Folk.Box.ba
+BA: HAYAT MUSIC = Hayat.Music.Box.ba
+BA: RTV LUKAVAC = TV.Lukavac.ba
+BA: RTV VOGOSCA = TV.Vogošća.HD.ba
+BA: O KANAL = O.Kanal.HD.ba
+BA: ARENA SPORT 5 PREMIER LIGA = Arena.Sport.5.rs
+
+# Croatia
+HR: BANOVINA TV = RTV.Banovina.hr
+HR: OSJECKA TV = Osjeèka.TV.hr
+HR: OSJEČKA = Osjeèka.TV.hr
+HR: MREŽA TV = MrezaZG.hr
+HR: JUGOTON TC = Jugoton.hr
+HR: NICK JR. HRVATSKI = Nick.Jr.HR.hr
+HR: MINI TV = MiniTV.hr
+HR: MARIA VISION MEĐUGORJE = Maria.Vision.TV.ba
+MK: TV 1000 = TV1000.hr
+
+# Montenegro
+MNG: RTVCG 1 = TVCG.1.rs
+MNG: RTVCG 2 = TVCG.2.rs
+MO: RTCG 1 = TVCG.1.rs
+MO: RTCG 2 = TVCG.2.rs
+MNG: RTCG SAT = TVMNE.(RTCG.Sat.(RS)).rs
+MNG: CG PRVA = Prva.CG.rs
+MO: TV E = TV.e.(CG)/(RS).rs
+
+# Wrong automatic matches
+SK: TV DOMA = -

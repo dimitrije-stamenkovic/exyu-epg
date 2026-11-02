@@ -1,0 +1,61 @@
+name: Build EPG
+
+on:
+  schedule:
+    # 01:00 Europe/Belgrade. GitHub cron is UTC only, so fire at both
+    # 23:00 UTC (= 01:00 CEST, summer) and 00:00 UTC (= 01:00 CET, winter);
+    # the check step below skips the one that doesn't match the season.
+    - cron: "0 23 * * *"
+    - cron: "0 0 * * *"
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.check.outputs.run }}
+    steps:
+      - id: check
+        env:
+          SCHEDULE: ${{ github.event.schedule }}
+        run: |
+          zone=$(TZ=Europe/Belgrade date +%Z)
+          case "$SCHEDULE" in
+            "0 23 * * *") [ "$zone" = CEST ] && run=true || run=false ;;
+            "0 0 * * *")  [ "$zone" = CET ]  && run=true || run=false ;;
+            *)            run=true ;;  # push / manual run
+          esac
+          echo "Belgrade zone: $zone, schedule: '${SCHEDULE}', run: $run"
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: check
+    if: needs.check.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install requests
+      - run: python build_epg.py
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+      - id: deploy
+        uses: actions/deploy-pages@v4
