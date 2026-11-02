@@ -72,7 +72,12 @@ COUNTRY_ALIASES = {
 }
 
 # Spellings that differ between playlist and guides, applied before matching
+# (before [tags] are removed, so tags can be part of a pattern)
 NAME_ALIASES = [
+    # The provider's Arena "[PLUS]" channels are Arena Premium:
+    # "ARENA [PLUS] 1", "ARENA SPORT [PLUS] 1", "ARENA SPORT 1 [PLUS]"
+    (r"\bARENA(?:\s+SPORT)?\s*\[PLUS\]\s*(\d+)", r"ARENA PREMIUM \1"),
+    (r"\bARENA\s+SPORT\s+(\d+)\s*\[PLUS\]", r"ARENA PREMIUM \1"),
     (r"\bSPORT\s*KLUB\b", "SK"),
     (r"\bNICK(ELODEON)?\s+(JR|JUNIOR)\b", "NICKJR"),
     (r"\bAND\b", "&"),
@@ -112,9 +117,9 @@ def channel_key(name):
 
     for hint in re.findall(r"\(([^)]*)\)", text):
         country = COUNTRY_ALIASES.get(hint.strip(), country)
-    text = re.sub(r"\[[^\]]*\]|\([^)]*\)", " ", text)
     for pattern, replacement in NAME_ALIASES:
         text = re.sub(pattern, replacement, text)
+    text = re.sub(r"\[[^\]]*\]|\([^)]*\)", " ", text)
 
     words = [w for w in re.findall(r"[A-Z0-9&]+", text) if w not in NOISE_WORDS]
     while words and words[-1] in COUNTRY_ALIASES:
